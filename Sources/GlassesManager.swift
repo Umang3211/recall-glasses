@@ -21,7 +21,7 @@ extension DateFormatter {
 final class GlassesManager: ObservableObject {
     /// How long a glasses photo gets before we stop waiting and use the phone.
     /// Twelve seconds was long enough to stall a whole demo on a dead stream.
-    static let glassesPhotoTimeout: Double = 4
+    static let glassesPhotoTimeout: Double = 14
 
     @Published var isConnected = false
     @Published var displayReady = false
