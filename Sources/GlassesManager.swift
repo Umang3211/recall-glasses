@@ -400,7 +400,17 @@ final class GlassesManager: ObservableObject {
     private func ensureStream(
         session: DeviceSession
     ) throws -> MWDATCamera.Stream {
-        if let stream, stream.state == .streaming { return stream }
+        // Reuse the stream we already own. A second addStream for the same
+        // capability is rejected (capabilityAlreadyActive), so if the existing
+        // one has gone idle after a capture, restart it rather than making a
+        // new one — that rejection was why only the first photo worked.
+        if let existing = stream {
+            if existing.state != .streaming {
+                log("glasses stream idle (state=\(existing.state)) — restarting it")
+                existing.start()
+            }
+            return existing
+        }
 
         let config = StreamConfiguration(
             videoCodec: .raw, resolution: .medium, frameRate: 15
