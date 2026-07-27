@@ -21,7 +21,9 @@ extension DateFormatter {
 final class GlassesManager: ObservableObject {
     /// How long a glasses photo gets before we stop waiting and use the phone.
     /// Twelve seconds was long enough to stall a whole demo on a dead stream.
-    static let glassesPhotoTimeout: Double = 3
+    static let glassesPhotoTimeout: Double = 8
+    /// How long to wait for the camera stream to actually go live.
+    static let streamReadyTimeout: Double = 6
 
     @Published var isConnected = false
     @Published var displayReady = false
@@ -336,6 +338,23 @@ final class GlassesManager: ObservableObject {
         }
         do {
             let stream = try ensureStream(session: session)
+
+            // The stream is started but not necessarily live yet. capturePhoto
+            // on a stream that hasn't reached .streaming is silently dropped —
+            // it never delivers on photoDataPublisher and we time out into the
+            // phone. Wait for it, the same way the display waits for .started.
+            var waited = 0.0
+            while stream.state != .streaming, waited < Self.streamReadyTimeout {
+                try? await Task.sleep(for: .milliseconds(120))
+                waited += 0.12
+            }
+            if stream.state != .streaming {
+                log("glasses stream never reached .streaming (state=\(stream.state)) — using the phone")
+                statusText = "Glasses camera not streaming — used the iPhone camera."
+                return await phoneCapture()
+            }
+            log("glasses stream live after \(String(format: "%.1f", waited))s")
+
             let image: UIImage? = await withCheckedContinuation { continuation in
                 photoContinuation = continuation
                 if !stream.capturePhoto(format: .jpeg) {
