@@ -40,6 +40,8 @@ final class GlassesManager: ObservableObject {
     /// Every DisplayState transition, newest last. Shown verbatim in Connect so
     /// "nothing appeared on the lens" is answerable instead of a guess.
     @Published var displayLog: [String] = []
+    /// Identifies each capture so a stale timeout cannot cancel a newer one.
+    private var photoAttempt: UInt64 = 0
 
     private var session: DeviceSession?
     private var selector: AutoDeviceSelector?
@@ -355,6 +357,8 @@ final class GlassesManager: ObservableObject {
             }
             log("glasses stream live after \(String(format: "%.1f", waited))s")
 
+            photoAttempt &+= 1
+            let attempt = photoAttempt
             let image: UIImage? = await withCheckedContinuation { continuation in
                 photoContinuation = continuation
                 if !stream.capturePhoto(format: .jpeg) {
@@ -362,13 +366,18 @@ final class GlassesManager: ObservableObject {
                     continuation.resume(returning: nil)
                     return
                 }
-                // Photo arrives on photoDataPublisher; guard with a timeout.
+                // Photo arrives on photoDataPublisher; guard with a timeout that
+                // only ever cancels ITS OWN attempt. The previous version had no
+                // identity, so a stale timer from an earlier capture would wake
+                // up and kill whichever capture happened to be in flight.
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(for: .seconds(Self.glassesPhotoTimeout))
-                    if let pending = self?.photoContinuation {
-                        self?.photoContinuation = nil
-                        pending.resume(returning: nil)
-                    }
+                    guard let self, self.photoAttempt == attempt,
+                          let pending = self.photoContinuation
+                    else { return }
+                    self.photoContinuation = nil
+                    self.log("glasses photo timed out after \(Self.glassesPhotoTimeout)s")
+                    pending.resume(returning: nil)
                 }
             }
             if let image {
