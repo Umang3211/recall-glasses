@@ -157,6 +157,7 @@ final class MeetEngine: ObservableObject {
     /// The last transcript already folded into someone's record. Guards the
     /// "reuse whatever Listen captured this session" fallback from attaching
     /// the previous person's words to the next face.
+    private var shownEarly: Set<String> = []
     private var lastConsumedTranscript = ""
 
     private init() {}
@@ -224,13 +225,28 @@ final class MeetEngine: ObservableObject {
             return jpeg
         }
 
+        // 1b — recognise the moment the frame lands, without waiting for the
+        // conversation. Someone you already know should get their card now;
+        // standing there while they re-introduce themselves is the bug.
+        let earlyTask = Task { @MainActor [weak self] () -> Recognition? in
+            guard let jpeg = await frameTask.value else { return nil }
+            guard let hit = try? await RecallAPI.recognize(jpeg: jpeg),
+                  hit.matched, !hit.name.isEmpty
+            else { return nil }
+            await self?.presentEarlyRecall(hit)
+            return hit
+        }
+
         // 2 — listen, for exactly as long as they talk. The engine and its tap
-        // are already running; this only opens a recognition task.
+        // are already running; this only opens a recognition task. A known face
+        // has already been shown by now; anything new said here still lands in
+        // the graph.
         phase = .listening
         statusLine = "Listening — let them introduce themselves."
         let fresh = await dictation.recordUntilSilence(
             trailingSilence: trailingSilence
         )
+        let early = await earlyTask.value
 
         var transcript = fresh
         if transcript.isEmpty, !carried.isEmpty, carried != lastConsumedTranscript {
@@ -256,7 +272,12 @@ final class MeetEngine: ObservableObject {
         }
 
         do {
-            let recognition = try await RecallAPI.recognize(jpeg: jpeg)
+            let recognition: Recognition
+            if let early {
+                recognition = early
+            } else {
+                recognition = try await RecallAPI.recognize(jpeg: jpeg)
+            }
             if recognition.matched, !recognition.name.isEmpty {
                 await handleMatch(recognition, transcript: transcript, jpeg: jpeg)
             } else {
@@ -331,6 +352,39 @@ final class MeetEngine: ObservableObject {
     }
 
     // MARK: Branches
+
+    /// A known face, surfaced the instant recognition lands — lens, voice and
+    /// card — while the microphone keeps listening for anything new.
+    @MainActor
+    private func presentEarlyRecall(_ hit: Recognition) async {
+        guard !shownEarly.contains(hit.name) else { return }
+        shownEarly.insert(hit.name)
+
+        let card = (try? await RecallAPI.recall(name: hit.name)) ?? nil
+        let lines = card?.lines ?? []
+        let headline = card?.headline ?? hit.name
+
+        statusLine = "\(hit.name) — you've met before."
+        results.insert(
+            MeetResult(
+                kind: .recognised,
+                name: hit.name,
+                role: hit.role,
+                org: hit.org,
+                headline: headline,
+                lines: lines
+            ),
+            at: 0
+        )
+        await ReminiCards.shared.showRecall(
+            headline: headline,
+            subhead: [hit.role, hit.org].filter { !$0.isEmpty }
+                .joined(separator: " · "),
+            lines: lines,
+            name: hit.name
+        )
+        speech?.speak(lines.first ?? headline)
+    }
 
     private func handleMatch(
         _ recognition: Recognition, transcript: String, jpeg: Data
