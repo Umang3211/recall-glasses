@@ -283,6 +283,17 @@ final class GlassesManager: ObservableObject {
         phoneFallback.stop()
     }
 
+    /// Full teardown + reconnect without quitting the app. When a session or
+    /// stream dies there is no recovery path today, which is why a restart was
+    /// the only way back.
+    func reconnect() async {
+        log("reconnect requested — tearing down")
+        disconnect()
+        photoContinuation = nil
+        try? await Task.sleep(for: .milliseconds(600))
+        await connect()
+    }
+
     func disconnect() {
         log("disconnect requested")
         display?.stop()

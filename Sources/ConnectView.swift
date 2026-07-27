@@ -77,6 +77,15 @@ struct ConnectView: View {
                 Text(glasses.isConnected ? "Disconnect" : "Connect glasses")
             }
             .buttonStyle(AccentButtonStyle())
+
+            // Full teardown + reconnect in place. Beats quitting the app when a
+            // session or stream has died mid-event.
+            Button {
+                Task { await glasses.reconnect() }
+            } label: {
+                Text("Reconnect glasses")
+            }
+            .buttonStyle(GhostButtonStyle())
         }
         .padding(20)
         .frame(maxWidth: .infinity)
